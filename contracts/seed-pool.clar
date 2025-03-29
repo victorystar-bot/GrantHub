@@ -27,6 +27,48 @@
 (define-constant err-no-votes (err u109))
 
 
+;; Data Maps
+(define-map funding-pools
+    { pool-id: uint }
+    {
+        owner: principal,
+        total-amount: uint,
+        remaining-amount: uint,
+        token-contract: principal,
+        active: bool
+    }
+)
+
+(define-map applications
+    { application-id: uint }
+    {
+        applicant: principal,
+        pool-id: uint,
+        requested-amount: uint,
+        status: (string-ascii 20),  ;; pending, approved, rejected, completed
+        phases: (list 5 {
+            description: (string-ascii 100),
+            amount: uint,
+            completed: bool
+        })
+    }
+)
+
+(define-map votes
+    { application-id: uint, voter: principal }
+    { in-favor: bool }
+)
+
+;; Vote tracking
+(define-map vote-tallies
+    { application-id: uint }
+    {
+        positive-count: uint,
+        total-count: uint
+    }
+)
+
+
 ;; Data Variables
 (define-data-var current-pool-id uint u0)
 (define-data-var current-application-id uint u0)
