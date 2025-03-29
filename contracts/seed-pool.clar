@@ -26,7 +26,6 @@
 (define-constant err-insufficient-votes (err u108))
 (define-constant err-no-votes (err u109))
 
-
 ;; Data Maps
 (define-map funding-pools
     { pool-id: uint }
@@ -67,7 +66,6 @@
         total-count: uint
     }
 )
-
 
 ;; Data Variables
 (define-data-var current-pool-id uint u0)
@@ -192,4 +190,111 @@
         { positive-count: u0, total-count: u0 }
         (map-get? vote-tallies { application-id: application-id })
     ))
+)
+
+;; Vote on Application
+(define-public (vote-on-application (application-id uint) (in-favor bool))
+    (let
+        (
+            ;; First validate the application-id
+            (valid-id (asserts! (validate-application-id application-id) err-not-found))
+            (application (unwrap! (map-get? applications { application-id: application-id }) err-not-found))
+            (current-tally (default-to 
+                { positive-count: u0, total-count: u0 }
+                (map-get? vote-tallies { application-id: application-id })))
+        )
+        ;; Validate application state
+        (asserts! (is-eq (get status application) "pending") err-invalid-state)
+        ;; Check if voter has already voted
+        (asserts! (is-none (map-get? votes { application-id: application-id, voter: tx-sender })) err-invalid-state)
+        
+        ;; Record the vote
+        (map-set votes
+            { application-id: application-id, voter: tx-sender }
+            { in-favor: in-favor }
+        )
+
+        ;; Update vote tally
+        (map-set vote-tallies
+            { application-id: application-id }
+            {
+                positive-count: (if in-favor 
+                    (+ (get positive-count current-tally) u1)
+                    (get positive-count current-tally)),
+                total-count: (+ (get total-count current-tally) u1)
+            }
+        )
+        (ok true)
+    )
+)
+
+;; Complete Phase
+(define-public (complete-phase (application-id uint) (phase-index uint))
+    (let
+        (
+            ;; First validate the application-id
+            (valid-id (asserts! (validate-application-id application-id) err-not-found))
+            (application (unwrap! (map-get? applications { application-id: application-id }) err-not-found))
+            (pool (unwrap! (map-get? funding-pools { pool-id: (get pool-id application) }) err-not-found))
+        )
+        ;; Validate application state
+        (asserts! (is-eq (get status application) "approved") err-invalid-state)
+        ;; Validate user is the applicant
+        (asserts! (is-eq tx-sender (get applicant application)) err-unauthorized)
+        ;; Validate phase index
+        (asserts! (< phase-index (len (get phases application))) err-invalid-phase)
+        
+        (ok true)
+    )
+)
+
+;; Approve or Reject Application
+(define-public (finalize-application (application-id uint))
+    (let
+        (
+            ;; First validate the application-id
+            (valid-id (asserts! (validate-application-id application-id) err-not-found))
+            (application (unwrap! (map-get? applications { application-id: application-id }) err-not-found))
+            (pool (unwrap! (map-get? funding-pools { pool-id: (get pool-id application) }) err-not-found))
+            (vote-tally (default-to 
+                { positive-count: u0, total-count: u0 }
+                (map-get? vote-tallies { application-id: application-id })))
+        )
+        ;; Check permissions
+        (asserts! (is-eq tx-sender (get owner pool)) err-owner-only)
+        ;; Check application is pending
+        (asserts! (is-eq (get status application) "pending") err-invalid-state)
+        ;; Check minimum votes
+        (asserts! (>= (get total-count vote-tally) (var-get minimum-votes-required)) err-insufficient-votes)
+        ;; Check if there are any votes
+        (asserts! (> (get total-count vote-tally) u0) err-no-votes)
+        
+        ;; Calculate if application is approved (more than quorum threshold)
+        (if (>= (get positive-count vote-tally) 
+            (/ (* (get total-count vote-tally) (var-get quorum-threshold)) u100))
+            ;; Approve application
+            (begin
+                (map-set applications
+                    { application-id: application-id }
+                    (merge application { status: "approved" })
+                )
+                ;; Update pool remaining amount
+                (map-set funding-pools
+                    { pool-id: (get pool-id application) }
+                    (merge pool 
+                        { remaining-amount: (- (get remaining-amount pool) (get requested-amount application)) }
+                    )
+                )
+                (ok true)
+            )
+            ;; Reject application
+            (begin
+                (map-set applications
+                    { application-id: application-id }
+                    (merge application { status: "rejected" })
+                )
+                (ok true)
+            )
+        )
+    )
 )
