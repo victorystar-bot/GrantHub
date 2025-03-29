@@ -147,3 +147,49 @@
         (ok pool-id)
     )
 )
+
+;; Submit Application
+(define-public (submit-application 
+    (pool-id uint)
+    (requested-amount uint)
+    (phases (list 5 {
+        description: (string-ascii 100),
+        amount: uint,
+        completed: bool
+    })))
+    (let
+        (
+            (application-id (+ (var-get current-application-id) u1))
+            (pool (unwrap! (map-get? funding-pools { pool-id: pool-id }) err-not-found))
+        )
+        ;; Validate pool id and state
+        (asserts! (validate-pool-id pool-id) err-not-found)
+        (asserts! (get active pool) err-invalid-state)
+        ;; Validate requested amount
+        (asserts! (validate-amount requested-amount) err-invalid-amount)
+        (asserts! (<= requested-amount (get remaining-amount pool)) err-insufficient-funds)
+        ;; Validate phases
+        (asserts! (validate-phases phases) err-invalid-phase)
+        
+        (map-set applications
+            { application-id: application-id }
+            {
+                applicant: tx-sender,
+                pool-id: pool-id,
+                requested-amount: requested-amount,
+                status: "pending",
+                phases: phases
+            }
+        )
+        (var-set current-application-id application-id)
+        (ok application-id)
+    )
+)
+
+;; Get vote count for an application
+(define-read-only (get-vote-counts (application-id uint))
+    (ok (default-to 
+        { positive-count: u0, total-count: u0 }
+        (map-get? vote-tallies { application-id: application-id })
+    ))
+)
